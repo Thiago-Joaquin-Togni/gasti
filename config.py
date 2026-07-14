@@ -28,3 +28,5 @@ DB_PASSWORD=os.getenv("DB_PASSWORD")
 DB_NAME=os.getenv("DB_NAME")
 
 LOGS_DIR = "logs"
+
+MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB

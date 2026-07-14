@@ -8,43 +8,48 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from config import TELEGRAM_BOT_TOKEN, ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
+from config import TELEGRAM_BOT_TOKEN, ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES, MAX_FILE_SIZE
 from core.LoggerManagger import log
+from core.Processer import Processer
+from ia.base import ExtractedData
+
 
 class TelegramReceiver:
-    def __init__(self):
+    def __init__(self, processer: Processer):
         if not TELEGRAM_BOT_TOKEN:
-            raise ValueError("TELEGRAM_BOT_TOKEN no está configurado en el archivo .env o variables de entorno.")
-        
-        # Inicializar la aplicación del bot de Telegram
+            raise ValueError(
+                "TELEGRAM_BOT_TOKEN no está configurado en el archivo .env "
+                "o variables de entorno."
+            )
+
+        self.processer = processer
+        self.temp_dir = Path("temp_downloads")
+        self.temp_dir.mkdir(exist_ok=True)
+
         self.app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-        
-        # Configurar los manejadores de eventos
         self._register_handlers()
 
     def _register_handlers(self):
-        """Registra los manejadores para los distintos tipos de comandos e inputs"""
-        # Comandos
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
-        
-        # Mensajes de texto 
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
-        
-        # Fotos 
-        self.app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
-        
-        # Documentos 
-        self.app.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
-        
-        # Audio
-        self.app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.handle_audio))
-        
-        # Manejador de botones interactivos (Confirmación / Cancelación)
-        self.app.add_handler(CallbackQueryHandler(self.handle_callback_query))
 
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Acción al ejecutar el comando /start"""
+        self.app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
+        )
+        self.app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
+        self.app.add_handler(
+            MessageHandler(filters.Document.ALL, self.handle_document)
+        )
+        self.app.add_handler(
+            MessageHandler(filters.VOICE | filters.AUDIO, self.handle_audio)
+        )
+        self.app.add_handler(
+            CallbackQueryHandler(self.handle_callback_query)
+        )
+
+    async def start_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         await update.message.reply_text(
             "👋 **¡Hola! Soy Gasti, tu asistente para el control de tus finanzas.**\n\n"
             "Envíame la información de tus ingresos o gastos en cualquier formato:\n\n"
@@ -52,182 +57,250 @@ class TelegramReceiver:
             "📸 **Foto:** Envía una imagen de tu comprobante.\n"
             "📄 **Documento:** Envía una factura en formato PDF.\n"
             "🎙️ **Audio:** Dicta el gasto diciendo algo como 'Cargué nafta por $80000'.\n\n",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
 
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Acción al ejecutar el comando /help"""
+    async def help_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         await update.message.reply_text(
             "📋 **Formatos y archivos soportados:**\n\n"
             "• **Imágenes:** JPG, JPEG, PNG (enviadas como foto o archivo).\n"
             "• **Documentos:** Facturas en formato PDF.\n"
             "• **Audio:** Notas de voz de Telegram o audios MP3, WAV, OGG, M4A.\n\n"
             "Cualquier otro formato será rechazado.",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
 
-    async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Manejador para mensajes de texto"""
+    def _user_info(self, update: Update):
+        user = update.effective_user
+        return str(user.id), user.username
+
+    async def _procesar_y_mostrar(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        tipo: str,
+        contenido: str,
+    ):
+        id_telegram, username = self._user_info(update)
+
+        try:
+            data = await self.processer.procesar_mensaje(
+                tipo, contenido, id_telegram, username
+            )
+        except Exception as e:
+            log.error(
+                f"(TelegramReceiver) Error en procesar_mensaje ({tipo}): {e}"
+            )
+            await update.message.reply_text(
+                "❌ Ocurrió un error al procesar tu mensaje. Intentalo de nuevo."
+            )
+            return
+
+        context.user_data["pending"] = data
+        await self._ask_for_confirmation(update, data)
+
+    async def handle_text(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         text = update.message.text
-        log.info(f"(TelegramReceiver -> handle_text)Texto recibido de @{update.effective_user.username}: {text}")
-        
-        # TODO: En la próxima iteración, enviaremos esto a la IA de Gemini para análisis real.
-        # Por ahora creamos un mock de la extracción
-        gasto_mock = {
-            "concepto": text,
-            "monto": "Por determinar",
-            "categoria": "General"
-        }
-        
-        await self._ask_for_confirmation(update, gasto_mock)
+        log.info(
+            f"(TelegramReceiver -> handle_text) Texto recibido de "
+            f"@{update.effective_user.username}: {text}"
+        )
+        await self._procesar_y_mostrar(update, context, "texto", text)
 
-    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Manejador para imágenes enviadas como foto"""
-        log.info(f"(TelegramReceiver -> handle_photo) Foto recibida de @{update.effective_user.username}")
-        
-        # Telegram envía una lista de fotos con distintos tamaños. Obtenemos la más grande (última)
+    async def handle_photo(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        log.info(
+            f"(TelegramReceiver -> handle_photo) Foto recibida de "
+            f"@{update.effective_user.username}"
+        )
+
         photo = update.message.photo[-1]
-        file_id = photo.file_id
-        
-        # Descargar la foto 
-        telegram_file = await context.bot.get_file(file_id)
-        file_path = self.temp_dir / f"{file_id}.jpg"
-        await telegram_file.download_to_drive(file_path)
-        
-        log.info(f"(TelegramReceiver -> handle_photo) Foto descargada exitosamente en {file_path}")
-        
-        # TODO: Integración con la IA 
-        gasto_mock = {
-            "concepto": "Compra en Supermercado (desde imagen)",
-            "monto": "$14,890.00",
-            "categoria": "Alimentos/Supermercado"
-        }
-        await self._ask_for_confirmation(update, gasto_mock)
 
-    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Manejador para documentos (por ejemplo, PDFs u otras extensiones)"""
+        if photo.file_size > MAX_FILE_SIZE:
+            await update.message.reply_text(
+                f"❌ La imagen supera los {MAX_FILE_SIZE // (1024*1024)} MB. "
+                "Enviá un archivo más liviano."
+            )
+            return
+
+        telegram_file = await context.bot.get_file(photo.file_id)
+        file_path = self.temp_dir / f"{photo.file_id}.jpg"
+        await telegram_file.download_to_drive(file_path)
+
+        log.info(
+            f"(TelegramReceiver -> handle_photo) Foto descargada en {file_path}"
+        )
+        await self._procesar_y_mostrar(update, context, "imagen", str(file_path))
+
+    async def handle_document(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         doc = update.message.document
         file_name = doc.file_name
         mime_type = doc.mime_type
-        
-        log.info(f"(TelegramReceiver -> handle_document) Documento recibido de @{update.effective_user.username}: {file_name} ({mime_type})")
-        
-        # Obtener extensión
-        ext = file_name.split(".")[-1].lower() if file_name and "." in file_name else ""
-        
-        # Validar tipo de archivo
+
+        log.info(
+            f"(TelegramReceiver -> handle_document) Documento recibido de "
+            f"@{update.effective_user.username}: {file_name} ({mime_type})"
+        )
+
+        ext = (
+            file_name.split(".")[-1].lower()
+            if file_name and "." in file_name
+            else ""
+        )
         is_valid = ext in ALLOWED_EXTENSIONS or mime_type in ALLOWED_MIME_TYPES
         if not is_valid:
             await update.message.reply_text(
                 f"❌ El archivo **'{file_name}'** no está permitido.\n\n"
                 "Por favor, envía imágenes (JPG, PNG) o documentos en PDF.",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
             )
             return
 
-        # Descargar el documento
-        file_id = doc.file_id
-        telegram_file = await context.bot.get_file(file_id)
-        file_path = self.temp_dir / f"{file_id}_{file_name}"
-        await telegram_file.download_to_drive(file_path)
-        
-        log.info(f"(TelegramReceiver -> handle_document) Documento descargado exitosamente en {file_path}")
-        
-        # TODO: Integración con la IA 
-        gasto_mock = {
-            "concepto": f"Factura {file_name}",
-            "monto": "$5,200.00",
-            "categoria": "Servicios"
-        }
-        await self._ask_for_confirmation(update, gasto_mock)
+        if doc.file_size > MAX_FILE_SIZE:
+            await update.message.reply_text(
+                f"❌ El archivo supera los {MAX_FILE_SIZE // (1024*1024)} MB. "
+                "Enviá un archivo más liviano."
+            )
+            return
 
-    async def handle_audio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Manejador para notas de voz o archivos de audio"""
+        telegram_file = await context.bot.get_file(doc.file_id)
+        file_path = self.temp_dir / f"{doc.file_id}_{file_name}"
+        await telegram_file.download_to_drive(file_path)
+
+        log.info(
+            f"(TelegramReceiver -> handle_document) Documento descargado en "
+            f"{file_path}"
+        )
+        await self._procesar_y_mostrar(
+            update, context, "documento", str(file_path)
+        )
+
+    async def handle_audio(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         is_voice = update.message.voice is not None
         audio_obj = update.message.voice if is_voice else update.message.audio
-        
-        log.info(f"(TelegramReceiver -> handle_audio) Audio recibido de @{update.effective_user.username} (Nota de voz: {is_voice})")
-        
-        # Validar tipo de audio (si tiene tipo MIME)
+
+        log.info(
+            f"(TelegramReceiver -> handle_audio) Audio recibido de "
+            f"@{update.effective_user.username} (Nota de voz: {is_voice})"
+        )
+
         if hasattr(audio_obj, "mime_type") and audio_obj.mime_type:
             if audio_obj.mime_type not in ALLOWED_MIME_TYPES:
-                # Comprobar extensión si es un archivo de audio con nombre
                 file_name = getattr(audio_obj, "file_name", "")
-                ext = file_name.split(".")[-1].lower() if file_name and "." in file_name else ""
+                ext = (
+                    file_name.split(".")[-1].lower()
+                    if file_name and "." in file_name
+                    else ""
+                )
                 if ext not in ALLOWED_EXTENSIONS:
                     await update.message.reply_text(
                         "❌ Formato de audio no soportado.\n"
-                        "Por favor envía notas de voz directas de Telegram o audios en formato MP3, WAV, OGG o M4A."
+                        "Por favor envía notas de voz directas de Telegram o "
+                        "audios en formato MP3, WAV, OGG o M4A."
                     )
                     return
-        
-        # Descargar audio
-        file_id = audio_obj.file_id
-        ext = "ogg" if is_voice else "mp3"
-        file_name = getattr(audio_obj, "file_name", f"{file_id}.{ext}")
-        
-        telegram_file = await context.bot.get_file(file_id)
-        file_path = self.temp_dir / f"{file_id}_{file_name}"
-        await telegram_file.download_to_drive(file_path)
-        
-        log.info(f"(TelegramReceiver -> handle_audio) Audio descargado exitosamente en {file_path}")
-        
-        # TODO: Integración con la IA 
-        gasto_mock = {
-            "concepto": "Gasto dictado (Voz)",
-            "monto": "$3,500.00",
-            "categoria": "Transporte"
-        }
-        await self._ask_for_confirmation(update, gasto_mock)
 
-    async def _ask_for_confirmation(self, update: Update, gasto: dict):
-        """Muestra los datos extraídos del gasto al usuario y pide confirmación"""
+        if audio_obj.file_size > MAX_FILE_SIZE:
+            await update.message.reply_text(
+                f"❌ El archivo de audio supera los {MAX_FILE_SIZE // (1024*1024)} MB. "
+                "Enviá un archivo más liviano."
+            )
+            return
+
+        ext = "ogg" if is_voice else "mp3"
+        file_name = getattr(audio_obj, "file_name", f"{audio_obj.file_id}.{ext}")
+
+        telegram_file = await context.bot.get_file(audio_obj.file_id)
+        file_path = self.temp_dir / f"{audio_obj.file_id}_{file_name}"
+        await telegram_file.download_to_drive(file_path)
+
+        log.info(
+            f"(TelegramReceiver -> handle_audio) Audio descargado en "
+            f"{file_path}"
+        )
+        await self._procesar_y_mostrar(
+            update, context, "audio", str(file_path)
+        )
+
+    async def _ask_for_confirmation(
+        self, update: Update, data: ExtractedData
+    ):
+        emoji_tipo = "📈" if data.tipo == "INGRESO" else "💸"
         mensaje = (
             "🔍 **Datos extraídos:**\n\n"
-            f"📝 **Concepto:** {gasto.get('concepto')}\n"
-            f"💵 **Monto:** {gasto.get('monto')}\n"
-            f"🏷️ **Categoría:** {gasto.get('categoria')}\n\n"
-            "¿La información extraída es correcta para guardarla?"
+            f"{emoji_tipo} **Tipo:** {data.tipo}\n"
+            f"📝 **Concepto:** {data.concepto}\n"
+            f"💵 **Monto:** ${data.monto:,.2f}\n"
+            f"🏷️ **Categoría:** {data.categoria}\n\n"
+            "¿La información es correcta para guardarla?"
         )
-        
-        # Botones en línea para confirmar o cancelar
+
         keyboard = [
             [
-                InlineKeyboardButton("Sí, es correcto ✅", callback_data="gasto_confirmado"),
-                InlineKeyboardButton("No, cancelar/corregir ❌", callback_data="gasto_cancelado")
+                InlineKeyboardButton(
+                    "Sí, es correcto ✅", callback_data="gasto_confirmado"
+                ),
+                InlineKeyboardButton(
+                    "No, cancelar ❌", callback_data="gasto_cancelado"
+                ),
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(mensaje, reply_markup=reply_markup, parse_mode="Markdown")
 
-    async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Maneja las interacciones de los botones de confirmación/cancelación"""
+        await update.message.reply_text(
+            mensaje, reply_markup=reply_markup, parse_mode="Markdown"
+        )
+
+    async def handle_callback_query(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         query = update.callback_query
-        # Es necesario responder al callback query para quitar el estado "cargando" del botón en Telegram
         await query.answer()
-        
-        action = query.data
-        original_text = query.message.text
-        
-        if action == "gasto_confirmado":
+
+        data: ExtractedData = context.user_data.get("pending")
+        if not data:
             await query.edit_message_text(
-                text=f"{original_text}\n\n✅ **¡Gasto guardado con éxito!** 🎉",
-                parse_mode="Markdown"
+                "❌ No hay datos pendientes para confirmar. "
+                "Enviá el gasto nuevamente."
             )
-            # TODO: Aquí se guardaría en base de datos o almacenamiento final.
-            
-        elif action == "gasto_cancelado":
+            return
+
+        if query.data == "gasto_confirmado":
+            try:
+                id_telegram = str(update.effective_user.id)
+                registro_id = await self.processer.confirmar_guardado(
+                    data, id_telegram
+                )
+                await query.edit_message_text(
+                    f"✅ **¡Gasto guardado con éxito!** (ID: {registro_id}) 🎉",
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                log.error(
+                    f"(TelegramReceiver) Error al confirmar guardado: {e}"
+                )
+                await query.edit_message_text(
+                    "❌ Ocurrió un error al guardar. Intentalo de nuevo."
+                )
+
+        elif query.data == "gasto_cancelado":
             await query.edit_message_text(
-                text=f"{original_text}\n\n❌ **Operación cancelada.** Puedes volver a intentarlo enviando el gasto nuevamente de otra forma.",
-                parse_mode="Markdown"
+                "❌ **Operación cancelada.**", parse_mode="Markdown"
             )
+
+        context.user_data.pop("pending", None)
 
     def run(self):
-        """Inicia el bot y se queda escuchando actualizaciones (polling)"""
-        log.info("(TelegramReceiver -> run) Iniciando el bot de Telegram...")
+        log.info(
+            "(TelegramReceiver -> run) Iniciando el bot de Telegram..."
+        )
         self.app.run_polling()
-
-if __name__ == "__main__":
-    receiver = TelegramReceiver()
-    receiver.run()

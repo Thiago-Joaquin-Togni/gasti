@@ -1,6 +1,14 @@
 .env
 docker-compose.yml
 env
+*.jpg 
+*.jpeg 
+*.png
+*.pdf 
+*.ogg 
+*.mp3
+*.wav
+*.m4a
 .docker-compose.yml.swp
 *__pycache__
 *.log
