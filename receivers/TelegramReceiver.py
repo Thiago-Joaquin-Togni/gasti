@@ -86,7 +86,7 @@ class TelegramReceiver:
         id_telegram, username = self._user_info(update)
 
         try:
-            data = await self.processer.procesar_mensaje(
+            data, registro_id = await self.processer.procesar_mensaje(
                 tipo, contenido, id_telegram, username
             )
         except Exception as e:
@@ -99,6 +99,7 @@ class TelegramReceiver:
             return
 
         context.user_data["pending"] = data
+        context.user_data["registro_id"] = registro_id
         await self._ask_for_confirmation(update, data)
 
     async def handle_text(
@@ -267,7 +268,8 @@ class TelegramReceiver:
         await query.answer()
 
         data: ExtractedData = context.user_data.get("pending")
-        if not data:
+        registro_id: int = context.user_data.get("registro_id")
+        if not data or not registro_id:
             await query.edit_message_text(
                 "❌ No hay datos pendientes para confirmar. "
                 "Enviá el gasto nuevamente."
@@ -276,10 +278,7 @@ class TelegramReceiver:
 
         if query.data == "gasto_confirmado":
             try:
-                id_telegram = str(update.effective_user.id)
-                registro_id = await self.processer.confirmar_guardado(
-                    data, id_telegram
-                )
+                await self.processer.confirmar_guardado(registro_id)
                 await query.edit_message_text(
                     f"✅ **¡Gasto guardado con éxito!** (ID: {registro_id}) 🎉",
                     parse_mode="Markdown",
@@ -293,11 +292,21 @@ class TelegramReceiver:
                 )
 
         elif query.data == "gasto_cancelado":
-            await query.edit_message_text(
-                "❌ **Operación cancelada.**", parse_mode="Markdown"
-            )
+            try:
+                await self.processer.cancelar_registro(registro_id)
+                await query.edit_message_text(
+                    "❌ **Operación cancelada.**", parse_mode="Markdown"
+                )
+            except Exception as e:
+                log.error(
+                    f"(TelegramReceiver) Error al cancelar registro: {e}"
+                )
+                await query.edit_message_text(
+                    "❌ Ocurrió un error al cancelar. Intentalo de nuevo."
+                )
 
         context.user_data.pop("pending", None)
+        context.user_data.pop("registro_id", None)
 
     def run(self):
         log.info(
