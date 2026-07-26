@@ -99,3 +99,12 @@ class Processer:
             self.dao.actualizar_estado_registro, registro_id, "CANCELADO"
         )
         log.info(f"(Processer) Registro {registro_id} cancelado")
+
+    async def marcar_fallido(self, registro_id: int) -> None:
+        log.info(
+            f"(Processer) Marcando registro id={registro_id} como FALLIDO"
+        )
+        await asyncio.to_thread(
+            self.dao.actualizar_estado_registro, registro_id, "FALLIDO"
+        )
+        log.info(f"(Processer) Registro {registro_id} marcado como FALLIDO")

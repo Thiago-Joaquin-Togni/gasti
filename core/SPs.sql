@@ -117,7 +117,7 @@ CREATE OR REPLACE FUNCTION fn_actualizar_estado_registro(
     p_estado VARCHAR(20)
 ) RETURNS VOID AS $$
 BEGIN
-    UPDATE registros SET estado = p_estado WHERE id = p_registro_id;
+    UPDATE registros SET estado = p_estado::registro_estado_enum WHERE id = p_registro_id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -190,5 +190,33 @@ BEGIN
     FROM registros r
     LEFT JOIN categorias c ON r.categoria_id = c.id
     WHERE r.id = p_registro_id;
+END;
+$$;
+
+-- Función para listar registros pendientes de un usuario (Lectura)
+CREATE OR REPLACE FUNCTION fn_listar_registros_pendientes(
+    p_id_telegram VARCHAR(100)
+)
+RETURNS TABLE (
+    id INT,
+    monto NUMERIC,
+    descripcion TEXT,
+    tipo VARCHAR(20),
+    fecha_hora TIMESTAMP
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        r.id,
+        r.monto,
+        r.descripcion,
+        r.tipo,
+        r.fecha_hora
+    FROM registros r
+    WHERE r.id_telegram = p_id_telegram
+      AND r.estado = 'PENDIENTE'
+    ORDER BY r.fecha_hora DESC;
 END;
 $$;

@@ -105,6 +105,11 @@ class DAO:
             "SELECT * FROM fn_obtener_registro_por_id(%s)", (registro_id,)
         )
 
+    def listar_registros_pendientes(self, id_telegram: str) -> list[dict]:
+        return self._fetchall(
+            "SELECT * FROM fn_listar_registros_pendientes(%s)", (id_telegram,)
+        )
+
     def actualizar_estado_registro(self, registro_id: int, estado: str) -> None:
         self._execute(
             "SELECT fn_actualizar_estado_registro(%s, %s)", (registro_id, estado)

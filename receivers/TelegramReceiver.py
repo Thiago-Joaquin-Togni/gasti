@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -32,6 +33,7 @@ class TelegramReceiver:
     def _register_handlers(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
+        self.app.add_handler(CommandHandler("pendientes", self.handle_pendientes))
 
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
@@ -71,6 +73,46 @@ class TelegramReceiver:
             "Cualquier otro formato será rechazado.",
             parse_mode="Markdown",
         )
+
+    async def handle_pendientes(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        id_telegram, _ = self._user_info(update)
+        pendientes = await asyncio.to_thread(
+            self.processer.dao.listar_registros_pendientes, id_telegram
+        )
+
+        if not pendientes:
+            await update.message.reply_text(
+                "📋 No tenés registros pendientes."
+            )
+            return
+
+        for reg in pendientes:
+            emoji = "📈" if reg["tipo"] == "INGRESO" else "💸"
+            fecha = reg["fecha_hora"].strftime("%d/%m %H:%M")
+            mensaje = (
+                f"{emoji} **{reg['tipo']}** — ${reg['monto']:,.2f}\n"
+                f"📝 {reg['descripcion']}\n"
+                f"🕐 {fecha}"
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "✅ Confirmar",
+                        callback_data=f"pendiente_confirmar_{reg['id']}",
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=f"pendiente_cancelar_{reg['id']}",
+                    ),
+                ]
+            ]
+            await update.message.reply_text(
+                mensaje,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown",
+            )
 
     def _user_info(self, update: Update):
         user = update.effective_user
@@ -267,6 +309,49 @@ class TelegramReceiver:
         query = update.callback_query
         await query.answer()
 
+        # Flujo desde /pendientes: registro_id viene en el callback_data
+        if query.data.startswith("pendiente_confirmar_"):
+            registro_id = int(query.data.split("_")[-1])
+            try:
+                await self.processer.confirmar_guardado(registro_id)
+                await query.edit_message_text(
+                    f"✅ **¡Gasto guardado con éxito!** (ID: {registro_id}) 🎉",
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                log.error(
+                    f"(TelegramReceiver) Error al confirmar desde /pendientes: {e}"
+                )
+                try:
+                    await self.processer.marcar_fallido(registro_id)
+                except Exception:
+                    pass
+                await query.edit_message_text(
+                    "❌ Ocurrió un error al guardar. Intentalo de nuevo."
+                )
+            return
+
+        if query.data.startswith("pendiente_cancelar_"):
+            registro_id = int(query.data.split("_")[-1])
+            try:
+                await self.processer.cancelar_registro(registro_id)
+                await query.edit_message_text(
+                    "❌ **Operación cancelada.**", parse_mode="Markdown"
+                )
+            except Exception as e:
+                log.error(
+                    f"(TelegramReceiver) Error al cancelar desde /pendientes: {e}"
+                )
+                try:
+                    await self.processer.marcar_fallido(registro_id)
+                except Exception:
+                    pass
+                await query.edit_message_text(
+                    "❌ Ocurrió un error al cancelar. Intentalo de nuevo."
+                )
+            return
+
+        # Flujo inline: usar context.user_data
         data: ExtractedData = context.user_data.get("pending")
         registro_id: int = context.user_data.get("registro_id")
         if not data or not registro_id:
@@ -287,6 +372,10 @@ class TelegramReceiver:
                 log.error(
                     f"(TelegramReceiver) Error al confirmar guardado: {e}"
                 )
+                try:
+                    await self.processer.marcar_fallido(registro_id)
+                except Exception:
+                    pass
                 await query.edit_message_text(
                     "❌ Ocurrió un error al guardar. Intentalo de nuevo."
                 )
@@ -301,6 +390,10 @@ class TelegramReceiver:
                 log.error(
                     f"(TelegramReceiver) Error al cancelar registro: {e}"
                 )
+                try:
+                    await self.processer.marcar_fallido(registro_id)
+                except Exception:
+                    pass
                 await query.edit_message_text(
                     "❌ Ocurrió un error al cancelar. Intentalo de nuevo."
                 )
