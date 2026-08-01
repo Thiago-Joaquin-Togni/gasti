@@ -56,6 +56,18 @@ class DAO:
             "SELECT * FROM fn_obtener_usuario(%s)", (id_telegram,)
         )
 
+    def actualizar_limite_mensual(self, id_telegram: str, limite: float | None) -> None:
+        self._execute(
+            "SELECT fn_actualizar_limite_mensual(%s, %s)", (id_telegram, limite)
+        )
+        log.info(f"Límite mensual actualizado para {id_telegram}: {limite}")
+
+    def gasto_mensual(self, id_telegram: str) -> float:
+        row = self._fetchone(
+            "SELECT fn_gasto_mensual(%s) AS total", (id_telegram,)
+        )
+        return float(row["total"]) if row and row["total"] is not None else 0.0
+
     # ── Categorías ──
 
     def listar_categorias(self) -> list[dict]:

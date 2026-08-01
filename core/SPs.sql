@@ -23,15 +23,49 @@ CREATE OR REPLACE FUNCTION fn_obtener_usuario(p_id_telegram VARCHAR(100))
 RETURNS TABLE (
     id_telegram VARCHAR(100),
     username VARCHAR(100),
-    fecha_registro TIMESTAMP
+    fecha_registro TIMESTAMP,
+    limite_mensual NUMERIC
 )
 LANGUAGE plpgsql
 AS $$
 BEGIN
     RETURN QUERY
-    SELECT u.id_telegram, u.username, u.fecha_registro
+    SELECT u.id_telegram, u.username, u.fecha_registro, u.limite_mensual
     FROM usuarios u
     WHERE u.id_telegram = p_id_telegram;
+END;
+$$;
+
+-- Función para actualizar o limpiar el límite mensual de un usuario (Escritura)
+CREATE OR REPLACE FUNCTION fn_actualizar_limite_mensual(
+    p_id_telegram VARCHAR(100),
+    p_limite NUMERIC
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE usuarios
+    SET limite_mensual = p_limite
+    WHERE id_telegram = p_id_telegram;
+END;
+$$;
+
+-- Función para sumar los gastos confirmados del mes calendario actual (Lectura)
+CREATE OR REPLACE FUNCTION fn_gasto_mensual(p_id_telegram VARCHAR(100))
+RETURNS NUMERIC
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_total NUMERIC;
+BEGIN
+    SELECT COALESCE(SUM(r.monto), 0) INTO v_total
+    FROM registros r
+    WHERE r.id_telegram = p_id_telegram
+      AND r.tipo = 'GASTO'
+      AND r.estado = 'COMPLETADO'
+      AND date_trunc('month', r.fecha_hora) = date_trunc('month', CURRENT_TIMESTAMP);
+    RETURN v_total;
 END;
 $$;
 

@@ -10,9 +10,20 @@ class ExtractedData:
     tipo: str  # GASTO | INGRESO
     categoria: str
     descripcion_detallada: Optional[str] = None
+    es_registro_valido: bool = True
+    razon_rechazo: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+class RegistroRechazadoError(Exception):
+    """Se lanza cuando la extracción es válida pero el registro fue rechazado
+    por la IA o por las validaciones deterministas de cordura."""
+
+    def __init__(self, razon: str):
+        self.razon = razon
+        super().__init__(razon)
 
 
 class BaseAIExtractor(ABC):
