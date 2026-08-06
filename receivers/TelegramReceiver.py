@@ -168,27 +168,37 @@ class TelegramReceiver:
             return
 
         limite = None if monto == 0 else monto
-        await self.processer.configurar_limite_mensual(id_telegram, limite)
-        context.user_data.pop("esperando_limite", None)
+        try:
+            await self.processer.configurar_limite_mensual(id_telegram, limite)
+            context.user_data.pop("esperando_limite", None)
 
-        if limite is None:
-            await update.message.reply_text(
-                "✅ **Límite mensual desactivado.**", parse_mode="Markdown"
-            )
-            return
+            if limite is None:
+                await update.message.reply_text(
+                    "✅ **Límite mensual desactivado.**", parse_mode="Markdown"
+                )
+                return
 
-        estado = await self.processer.consultar_limite(id_telegram)
-        if estado:
-            await update.message.reply_text(
-                f"✅ **Límite mensual configurado:** ${limite:,.2f}\n\n"
-                f"📉 Gastado este mes: ${estado['gastado']:,.2f}\n"
-                f"📉 Restante: ${estado['restante']:,.2f}",
-                parse_mode="Markdown",
+            estado = await self.processer.consultar_limite(id_telegram)
+            if estado:
+                await update.message.reply_text(
+                    f"✅ **Límite mensual configurado:** ${limite:,.2f}\n\n"
+                    f"📉 Gastado este mes: ${estado['gastado']:,.2f}\n"
+                    f"📉 Restante: ${estado['restante']:,.2f}",
+                    parse_mode="Markdown",
+                )
+            else:
+                await update.message.reply_text(
+                    f"✅ **Límite mensual configurado:** ${limite:,.2f}",
+                    parse_mode="Markdown",
+                )
+        except Exception as e:
+            log.error(
+                f"(TelegramReceiver) Error al procesar límite de "
+                f"{id_telegram}: {e}"
             )
-        else:
+            context.user_data.pop("esperando_limite", None)
             await update.message.reply_text(
-                f"✅ **Límite mensual configurado:** ${limite:,.2f}",
-                parse_mode="Markdown",
+                "❌ No pude guardar el límite. Intentalo de nuevo."
             )
 
     async def _procesar_y_mostrar(

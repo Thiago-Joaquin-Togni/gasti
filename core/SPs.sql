@@ -18,6 +18,10 @@ BEGIN
 END;
 $$;
 
+-- PostgreSQL no permite cambiar el tipo de retorno de una función existente,
+-- por eso se dropea antes de recrearla con la columna limite_mensual
+DROP FUNCTION IF EXISTS fn_obtener_usuario(VARCHAR(100));
+
 -- Función para obtener un usuario por su ID de Telegram (Lectura)
 CREATE OR REPLACE FUNCTION fn_obtener_usuario(p_id_telegram VARCHAR(100))
 RETURNS TABLE (
