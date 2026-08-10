@@ -218,12 +218,7 @@ class TelegramReceiver:
             log.warning(
                 f"(TelegramReceiver) Registro rechazado ({tipo}): {e.razon}"
             )
-            await update.message.reply_text(
-                "❌ No pude registrar eso como un gasto o ingreso.\n\n"
-                f"Motivo: {e.razon}\n\n"
-                "Enviame la información de otra forma (texto, foto del "
-                "comprobante, PDF o nota de voz)."
-            )
+            await update.message.reply_text(e.respuesta or e.razon)
             return
         except Exception as e:
             log.error(
@@ -382,6 +377,7 @@ class TelegramReceiver:
     ):
         emoji_tipo = "📈" if data.tipo == "INGRESO" else "💸"
         mensaje = (
+            f"{data.respuesta}\n\n"
             "🔍 **Datos extraídos:**\n\n"
             f"{emoji_tipo} **Tipo:** {data.tipo}\n"
             f"📝 **Concepto:** {data.concepto}\n"

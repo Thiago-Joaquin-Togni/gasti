@@ -59,12 +59,13 @@ class Processer:
             f"— {data.concepto} [{data.categoria}]"
         )
 
-        razon_rechazo = self._validar_minimo(data)
-        if razon_rechazo:
-            await self._rechazar_registro(id_telegram, contenido, razon_rechazo)
-        elif not data.es_registro_valido:
+        es_valido = self._validar_registro(data)
+        if not es_valido or not data.es_registro_valido:
             razon = data.razon_rechazo or "Registro inválido."
-            await self._rechazar_registro(id_telegram, contenido, razon)
+            respuesta = data.respuesta if not data.es_registro_valido else None
+            await self._rechazar_registro(
+                id_telegram, contenido, razon, respuesta
+            )
 
         categoria = await asyncio.to_thread(
             self.dao.obtener_categoria_por_nombre, data.categoria
@@ -89,15 +90,21 @@ class Processer:
         )
         return data, registro_id
 
-    def _validar_minimo(self, data: ExtractedData) -> str | None:
+    def _validar_registro(self, data: ExtractedData) -> bool:
         if data.tipo not in ("GASTO", "INGRESO"):
-            return f"El tipo '{data.tipo}' no es válido (debe ser GASTO o INGRESO)."
+            return False
         if not isinstance(data.monto, (int, float)) or not data.monto > 0:
-            return f"El monto ${data.monto} no es válido (debe ser mayor a 0)."
-        return None
+            return False
+        if not data.categoria:
+            return False
+        return True
 
     async def _rechazar_registro(
-        self, id_telegram: str, contenido: str, razon: str
+        self,
+        id_telegram: str,
+        contenido: str,
+        razon: str,
+        respuesta: str | None = None,
     ) -> None:
         registro_id = await asyncio.to_thread(
             self.dao.insertar_registro,
@@ -113,7 +120,7 @@ class Processer:
         log.warning(
             f"(Processer) Registro rechazado id={registro_id}: {razon}"
         )
-        raise RegistroRechazadoError(razon)
+        raise RegistroRechazadoError(razon, respuesta=respuesta)
 
     async def confirmar_guardado(self, registro_id: int) -> None:
         log.info(

@@ -9,6 +9,7 @@ class ExtractedData:
     monto: float
     tipo: str  # GASTO | INGRESO
     categoria: str
+    respuesta: str
     descripcion_detallada: Optional[str] = None
     es_registro_valido: bool = True
     razon_rechazo: Optional[str] = None
@@ -21,8 +22,9 @@ class RegistroRechazadoError(Exception):
     """Se lanza cuando la extracción es válida pero el registro fue rechazado
     por la IA o por las validaciones deterministas de cordura."""
 
-    def __init__(self, razon: str):
+    def __init__(self, razon: str, respuesta: Optional[str] = None):
         self.razon = razon
+        self.respuesta = respuesta
         super().__init__(razon)
 
 
